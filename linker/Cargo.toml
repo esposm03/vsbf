@@ -1,8 +1,0 @@
-[package]
-name = "linker"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-bytemuck.workspace = true
-vsbf.path = "../vsbf"
