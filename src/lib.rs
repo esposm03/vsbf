@@ -63,11 +63,63 @@ impl FileHeader {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sym {
     pub name: u32, // offset into strtab
     pub size: u16,
     pub section: u16,
     pub value: u64,
+}
+impl Sym {
+    pub fn parse(i: &[u8]) -> IResult<&[u8], Self> {
+        let (i, name) = number::le_u32(i)?;
+        let (i, size) = number::le_u16(i)?;
+        let (i, section) = number::le_u16(i)?;
+        let (i, value) = number::le_u64(i)?;
+
+        let ret = Self {
+            name,
+            size,
+            section,
+            value,
+        };
+
+        Ok((i, ret))
+    }
+
+    pub fn write(&self, w: &mut dyn io::Write) -> io::Result<()> {
+        w.write_all(&self.name.to_le_bytes())?;
+        w.write_all(&self.size.to_le_bytes())?;
+        w.write_all(&self.section.to_le_bytes())?;
+        w.write_all(&self.value.to_le_bytes())?;
+        Ok(())
+    }
+
+    pub fn print(obj: &Vsbf, syms: &[Self]) {
+        let mut name_len = 4;
+        for sym in syms {
+            name_len = obj.string_at(sym.name as usize).len().max(name_len);
+        }
+
+        println!(
+            "{:<name_len$} {:6} {:8} {}",
+            "Name",
+            "Size",
+            "Value",
+            "Section",
+            name_len = name_len,
+        );
+        for sym in syms {
+            println!(
+                "{:<name_len$} 0x{:4x} 0x{:08x} {}",
+                obj.string_at(sym.name as usize),
+                sym.size,
+                sym.value,
+                sym.section,
+                name_len = name_len,
+            );
+        }
+    }
 }
 
 pub struct Rel {
@@ -270,24 +322,41 @@ pub struct Vsbf {
     segments: Vec<SegmentHeader>,
     sections: Vec<SectionHeader>,
     strtab: Vec<u8>,
+    syms: Vec<Sym>,
     data: Vec<u8>,
 }
 impl Vsbf {
+    pub fn empty() -> Self {
+        Self {
+            arch: 0,
+            os: 0,
+            segments: vec![],
+            sections: vec![],
+            strtab: vec![],
+            syms: vec![],
+            data: vec![],
+        }
+    }
+
     pub fn parse(i: &[u8]) -> IResult<&[u8], Self> {
         let (i, header) = FileHeader::parse(i)?;
-        let (i, segments) =
-            multi::many_m_n(0, header.num_segments as usize, SegmentHeader::parse)(i)?;
-        let (i, sections) =
-            multi::many_m_n(0, header.num_sections as usize, SectionHeader::parse)(i)?;
-        let strtab = i[..header.strtab_size as usize].to_vec();
-        let i = &i[header.strtab_size as usize..];
+
+        let n_syms = header.num_symbols as usize;
+        let n_segs = header.num_segments as usize;
+        let n_sects = header.num_sections as usize;
+
+        let (i, segments) = multi::many_m_n(n_segs, n_segs, SegmentHeader::parse)(i)?;
+        let (i, sections) = multi::many_m_n(n_sects, n_sects, SectionHeader::parse)(i)?;
+        let (strtab, i) = i.split_at(header.strtab_size as usize);
+        let (i, syms) = multi::many_m_n(n_syms, n_syms, Sym::parse)(i)?;
 
         let file = Vsbf {
             os: header.os,
             arch: header.arch,
             sections,
             segments,
-            strtab,
+            strtab: strtab.to_vec(),
+            syms,
             data: i.to_vec(),
         };
 
@@ -333,8 +402,43 @@ impl Vsbf {
         return self.sections.clone();
     }
 
+    // === STRINGS ===
+
+    pub fn push_string(&mut self, data: &str) {
+        assert!(data.is_ascii());
+        assert!(data.len() <= u16::MAX as usize);
+
+        let len = data.len() as u16;
+
+        self.strtab.extend_from_slice(&len.to_le_bytes());
+        self.strtab.extend_from_slice(data.as_bytes());
+    }
+
     pub fn strings(&self) -> StrTabIter {
         StrTabIter(self, 0)
+    }
+
+    pub fn string_at(&self, i: usize) -> &str {
+        let len = u16::from_le_bytes(self.strtab[i..i + 2].try_into().unwrap()) as usize;
+        assert!(i + 2 + len <= self.strtab.len());
+
+        str::from_utf8(&self.strtab[i + 2..i + len + 2]).unwrap()
+    }
+
+    // === SYMBOLS ===
+
+    pub fn push_sym(&mut self, sym: Sym) {
+        self.syms.push(sym);
+
+        // TODO: adjust all offsets
+    }
+
+    pub fn syms(&self) -> &[Sym] {
+        &self.syms
+    }
+
+    pub fn syms_mut(&mut self) -> &mut [Sym] {
+        &mut self.syms
     }
 }
 
@@ -363,19 +467,11 @@ impl<'a> Iterator for StrTabIter<'a> {
 #[test]
 #[cfg(test)]
 fn test_strtab() {
-    let vsbf = Vsbf {
-        arch: 0,
-        os: 0,
-        segments: vec![],
-        sections: vec![],
-        #[rustfmt::skip]
-        strtab: vec![
-            0x05, 0x00, b'h', b'e', b'l', b'l', b'o', // len 5 (little endian), data "hello"
-            0x00, 0x00,                               // len 0
-            0x02, 0x00, b'h', b'i',                   // len 2 (little endian), data "hi"
-        ],
-        data: vec![],
-    };
+    let mut vsbf = Vsbf::empty();
+    vsbf.push_string("hello");
+    vsbf.push_string("");
+    vsbf.push_string("hi");
+
     let mut iter = vsbf.strings();
 
     assert_eq!(iter.next().unwrap(), (0, "hello"));
@@ -395,6 +491,7 @@ fn test_strtab_malformed() {
         sections: vec![],
         strtab: vec![0x05, 0x00],
         data: vec![],
+        syms: vec![],
     };
     vsbf.strings().next();
 }

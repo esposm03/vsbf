@@ -12,5 +12,4 @@ name = "loader"
 bitflags = { version = "2.6.0", features = ["bytemuck"] }
 capstone = "0.12.0"
 libc = "0.2.158"
-multimap = { version = "0.10.0", default-features = false }
 nom = "7.1.3"
