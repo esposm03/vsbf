@@ -1,3 +1,4 @@
+use core::{fmt, str};
 use std::{fmt::Display, io};
 
 use bitflags::bitflags;
@@ -72,7 +73,7 @@ pub struct Sym {
 pub struct Rel {
     pub typ: u8,
     pub needed: u32, // offset into strtab
-    pub address: u64,
+    pub offset: u64,
 }
 
 bitflags! {
@@ -176,7 +177,7 @@ impl SegmentHeader {
 pub const SECTION_HDR_SIZE: u32 = 16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SectionHeader {
-    pub typ: u8,
+    pub typ: SectionType,
     pub flags: PermissionFlags,
     pub file_size: u16,
     pub offset: u32,
@@ -191,6 +192,7 @@ impl SectionHeader {
         let (i, memory) = number::le_u64(i)?;
 
         let flags = PermissionFlags::from_bits_truncate(flags);
+        let typ = SectionType::try_from(typ).unwrap();
 
         let ret = SectionHeader {
             typ,
@@ -220,34 +222,73 @@ impl SectionHeader {
 
         for hd in hd {
             println!(
-                "{:4x} {:4} {:08x} {:08x} {:08x}",
+                "{:4} {:4} {:08x} {:08x} {:08x}",
                 hd.typ, hd.flags, hd.offset, hd.file_size, hd.memory,
             );
         }
     }
 }
 
-pub struct Vsbf<'a> {
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionType {
+    Text = 0,
+    Data = 1,
+    Rodata = 2,
+}
+impl TryFrom<u8> for SectionType {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        use SectionType::*;
+        match value {
+            0 => Ok(Text),
+            1 => Ok(Data),
+            2 => Ok(Rodata),
+            _ => Err(value),
+        }
+    }
+}
+impl fmt::Display for SectionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(match self {
+            SectionType::Text => "text",
+            SectionType::Data => "data",
+            SectionType::Rodata => "rodata",
+        })
+    }
+}
+impl SectionType {
+    pub fn to_le_bytes(&self) -> [u8; 1] {
+        return [*self as u8];
+    }
+}
+
+pub struct Vsbf {
     arch: u16,
     os: u16,
     segments: Vec<SegmentHeader>,
     sections: Vec<SectionHeader>,
-    data: &'a [u8],
+    strtab: Vec<u8>,
+    data: Vec<u8>,
 }
-impl<'a> Vsbf<'a> {
-    pub fn parse(i: &'a [u8]) -> IResult<&'a [u8], Self> {
+impl Vsbf {
+    pub fn parse(i: &[u8]) -> IResult<&[u8], Self> {
         let (i, header) = FileHeader::parse(i)?;
         let (i, segments) =
             multi::many_m_n(0, header.num_segments as usize, SegmentHeader::parse)(i)?;
         let (i, sections) =
             multi::many_m_n(0, header.num_sections as usize, SectionHeader::parse)(i)?;
+        let strtab = i[..header.strtab_size as usize].to_vec();
+        let i = &i[header.strtab_size as usize..];
 
         let file = Vsbf {
             os: header.os,
             arch: header.arch,
             sections,
             segments,
-            data: i,
+            strtab,
+            data: i.to_vec(),
         };
 
         Ok((i, file))
@@ -273,7 +314,7 @@ impl<'a> Vsbf<'a> {
             sec.write(w)?;
         }
         // write other things
-        w.write_all(self.data)?;
+        w.write_all(&self.data)?;
 
         Ok(())
     }
@@ -291,4 +332,69 @@ impl<'a> Vsbf<'a> {
     pub fn sections(&self) -> Vec<SectionHeader> {
         return self.sections.clone();
     }
+
+    pub fn strings(&self) -> StrTabIter {
+        StrTabIter(self, 0)
+    }
+}
+
+pub struct StrTabIter<'a>(&'a Vsbf, usize);
+impl<'a> Iterator for StrTabIter<'a> {
+    type Item = (u32, &'a str);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let i = self.1;
+
+        if i >= self.0.strtab.len() {
+            return None;
+        }
+
+        let len = u16::from_le_bytes(self.0.strtab[i..i + 2].try_into().unwrap()) as usize;
+        assert!(i + 2 + len <= self.0.strtab.len());
+
+        self.1 += 2 + len;
+        Some((
+            i as u32,
+            str::from_utf8(&self.0.strtab[i + 2..i + 2 + len]).unwrap(),
+        ))
+    }
+}
+
+#[test]
+#[cfg(test)]
+fn test_strtab() {
+    let vsbf = Vsbf {
+        arch: 0,
+        os: 0,
+        segments: vec![],
+        sections: vec![],
+        #[rustfmt::skip]
+        strtab: vec![
+            0x05, 0x00, b'h', b'e', b'l', b'l', b'o', // len 5 (little endian), data "hello"
+            0x00, 0x00,                               // len 0
+            0x02, 0x00, b'h', b'i',                   // len 2 (little endian), data "hi"
+        ],
+        data: vec![],
+    };
+    let mut iter = vsbf.strings();
+
+    assert_eq!(iter.next().unwrap(), (0, "hello"));
+    assert_eq!(iter.next().unwrap(), (7, ""));
+    assert_eq!(iter.next().unwrap(), (9, "hi"));
+    assert!(iter.next().is_none());
+}
+
+#[test]
+#[cfg(test)]
+#[should_panic]
+fn test_strtab_malformed() {
+    let vsbf = Vsbf {
+        arch: 0,
+        os: 0,
+        segments: vec![],
+        sections: vec![],
+        strtab: vec![0x05, 0x00],
+        data: vec![],
+    };
+    vsbf.strings().next();
 }
