@@ -98,7 +98,7 @@ impl Sym {
     pub fn print(obj: &Vsbf, syms: &[Self]) {
         let mut name_len = 4;
         for sym in syms {
-            name_len = obj.string_at(sym.name as usize).len().max(name_len);
+            name_len = obj.string_at(sym.name).len().max(name_len);
         }
 
         println!(
@@ -112,7 +112,7 @@ impl Sym {
         for sym in syms {
             println!(
                 "{:<name_len$} 0x{:4x} 0x{:08x} {}",
-                obj.string_at(sym.name as usize),
+                obj.string_at(sym.name),
                 sym.size,
                 sym.value,
                 sym.section,
@@ -122,10 +122,63 @@ impl Sym {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rel {
-    pub typ: u8,
+    pub typ: u16,
+    pub addend: i16,
     pub needed: u32, // offset into strtab
     pub offset: u64,
+}
+impl Rel {
+    pub fn parse(i: &[u8]) -> IResult<&[u8], Self> {
+        let (i, typ) = number::le_u16(i)?;
+        let (i, addend) = number::le_i16(i)?;
+        let (i, needed) = number::le_u32(i)?;
+        let (i, offset) = number::le_u64(i)?;
+
+        let ret = Self {
+            typ,
+            addend,
+            needed,
+            offset,
+        };
+
+        Ok((i, ret))
+    }
+
+    pub fn write(&self, w: &mut dyn io::Write) -> io::Result<()> {
+        w.write_all(&self.typ.to_le_bytes())?;
+        w.write_all(&self.addend.to_le_bytes())?;
+        w.write_all(&self.needed.to_le_bytes())?;
+        w.write_all(&self.offset.to_le_bytes())?;
+        Ok(())
+    }
+
+    pub fn print(obj: &Vsbf, rels: &[Self]) {
+        let mut name_len = 4;
+        for rel in rels {
+            name_len = 1 + obj.string_at(rel.needed).len().max(name_len);
+        }
+
+        println!(
+            "{:<name_len$} {:6} {:8} {}",
+            "Name",
+            "Type",
+            "Offset",
+            "Addend",
+            name_len = name_len,
+        );
+        for rel in rels {
+            println!(
+                "{:<name_len$} 0x{:4x} 0x{:08x} {}",
+                obj.string_at(rel.needed),
+                rel.typ,
+                rel.offset,
+                rel.addend,
+                name_len = name_len,
+            );
+        }
+    }
 }
 
 bitflags! {
@@ -323,6 +376,7 @@ pub struct Vsbf {
     sections: Vec<SectionHeader>,
     strtab: Vec<u8>,
     syms: Vec<Sym>,
+    rels: Vec<Rel>,
     data: Vec<u8>,
 }
 impl Vsbf {
@@ -334,6 +388,7 @@ impl Vsbf {
             sections: vec![],
             strtab: vec![],
             syms: vec![],
+            rels: vec![],
             data: vec![],
         }
     }
@@ -343,20 +398,23 @@ impl Vsbf {
 
         let n_syms = header.num_symbols as usize;
         let n_segs = header.num_segments as usize;
+        let n_rels = header.num_relocs as usize;
         let n_sects = header.num_sections as usize;
 
-        let (i, segments) = multi::many_m_n(n_segs, n_segs, SegmentHeader::parse)(i)?;
-        let (i, sections) = multi::many_m_n(n_sects, n_sects, SectionHeader::parse)(i)?;
-        let (strtab, i) = i.split_at(header.strtab_size as usize);
-        let (i, syms) = multi::many_m_n(n_syms, n_syms, Sym::parse)(i)?;
+        let (i, segments) = multi::count(SegmentHeader::parse, n_segs)(i)?;
+        let (i, sections) = multi::count(SectionHeader::parse, n_sects)(i)?;
+        let (i, strtab) = bytes::take(header.strtab_size)(i)?;
+        let (i, syms) = multi::count(Sym::parse, n_syms)(i)?;
+        let (i, rels) = multi::count(Rel::parse, n_rels)(i)?;
 
         let file = Vsbf {
-            os: header.os,
             arch: header.arch,
-            sections,
+            os: header.os,
             segments,
+            sections,
             strtab: strtab.to_vec(),
             syms,
+            rels,
             data: i.to_vec(),
         };
 
@@ -418,7 +476,8 @@ impl Vsbf {
         StrTabIter(self, 0)
     }
 
-    pub fn string_at(&self, i: usize) -> &str {
+    pub fn string_at(&self, i: u32) -> &str {
+        let i = i as usize;
         let len = u16::from_le_bytes(self.strtab[i..i + 2].try_into().unwrap()) as usize;
         assert!(i + 2 + len <= self.strtab.len());
 
@@ -439,6 +498,16 @@ impl Vsbf {
 
     pub fn syms_mut(&mut self) -> &mut [Sym] {
         &mut self.syms
+    }
+
+    // === RELOCATIONS ===
+
+    pub fn rels(&self) -> &[Rel] {
+        &self.rels
+    }
+
+    pub fn rels_mut(&mut self) -> &mut [Rel] {
+        &mut self.rels
     }
 }
 
@@ -478,6 +547,10 @@ fn test_strtab() {
     assert_eq!(iter.next().unwrap(), (7, ""));
     assert_eq!(iter.next().unwrap(), (9, "hi"));
     assert!(iter.next().is_none());
+
+    assert_eq!(vsbf.string_at(0), "hello");
+    assert_eq!(vsbf.string_at(7), "");
+    assert_eq!(vsbf.string_at(9), "hi");
 }
 
 #[test]
@@ -491,6 +564,7 @@ fn test_strtab_malformed() {
         sections: vec![],
         strtab: vec![0x05, 0x00],
         data: vec![],
+        rels: vec![],
         syms: vec![],
     };
     vsbf.strings().next();
