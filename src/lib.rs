@@ -369,6 +369,7 @@ impl SectionType {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct Vsbf {
     arch: u16,
     os: u16,
@@ -427,9 +428,9 @@ impl Vsbf {
             os: self.os,
             num_segments: self.segments.len() as _,
             num_sections: self.sections.len() as _,
-            strtab_size: 0,
-            num_symbols: 0,
-            num_relocs: 0,
+            strtab_size: self.strtab.len() as _,
+            num_symbols: self.syms.len() as _,
+            num_relocs: self.rels.len() as _,
             next_header: 0,
         };
 
@@ -440,7 +441,13 @@ impl Vsbf {
         for sec in &self.sections {
             sec.write(w)?;
         }
-        // write other things
+        w.write_all(&self.strtab)?;
+        for sym in &self.syms {
+            sym.write(w)?;
+        }
+        for rel in &self.rels {
+            rel.write(w)?;
+        }
         w.write_all(&self.data)?;
 
         Ok(())
@@ -568,4 +575,29 @@ fn test_strtab_malformed() {
         syms: vec![],
     };
     vsbf.strings().next();
+}
+
+#[test]
+#[cfg(test)]
+fn test_parse_write() {
+    use std::io::Cursor;
+
+    // Empty file
+    let mut buf = Cursor::new(vec![]);
+    let vsbf = Vsbf::empty();
+    vsbf.write(&mut buf).unwrap();
+    assert_eq!(Vsbf::parse(&buf.into_inner()).unwrap().1, vsbf);
+
+    // File with a string and a symbol
+    let mut buf = Cursor::new(vec![]);
+    let mut vsbf = Vsbf::empty();
+    vsbf.push_string("hello");
+    vsbf.push_sym(Sym {
+        name: 0,
+        size: 10,
+        section: 0,
+        value: 20,
+    });
+    vsbf.write(&mut buf).unwrap();
+    assert_eq!(Vsbf::parse(&buf.into_inner()).unwrap().1, vsbf);
 }
