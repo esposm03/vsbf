@@ -18,7 +18,7 @@ use vsbf::Vsbf;
 
 fn main() {
     let buf = std::fs::read(args().nth(1).unwrap()).unwrap();
-    let (_, file) = Vsbf::parse(&buf).unwrap();
+    let (data, file) = Vsbf::parse(&buf).unwrap();
 
     let cs = Capstone::new()
         .x86()
@@ -39,7 +39,7 @@ fn main() {
 
         let start = segment.file as usize;
         let end = start + segment.file_size as usize;
-        emu.mem_write(segment.mem + 0x1000, &buf[start..end])
+        emu.mem_write(segment.mem + 0x1000, &data[start..end])
             .unwrap();
     }
 

@@ -13,13 +13,12 @@ fn main() {
     let (_, mut obj) = Vsbf::parse(&buf).unwrap();
 
     let sections = obj.sections();
-    let start = sections[0].offset as usize;
 
     obj.add_segment(SegmentHeader {
         typ: 0,
         flags: PermissionFlags::all(),
         align: 0x1000,
-        file: start as u32,
+        file: 0,
         mem: 0,
         file_size: sections[0].file_size as _,
         mem_size: sections[0].file_size as _,

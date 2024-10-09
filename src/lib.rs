@@ -453,14 +453,7 @@ impl Vsbf {
         Ok(())
     }
 
-    pub fn add_segment(&mut self, mut seg: SegmentHeader) {
-        seg.file += SEGMENT_HDR_SIZE;
-        for segm in &mut self.segments {
-            segm.file += SEGMENT_HDR_SIZE;
-        }
-        for sect in &mut self.sections {
-            sect.offset += SEGMENT_HDR_SIZE;
-        }
+    pub fn add_segment(&mut self, seg: SegmentHeader) {
         self.segments.push(seg);
     }
 
