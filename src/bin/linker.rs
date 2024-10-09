@@ -1,6 +1,10 @@
-use std::{env::args, fs, process::exit};
+use std::{
+    env::args,
+    fs::{self, File},
+    process::exit,
+};
 
-use vsbf::Vsbf;
+use vsbf::{PermissionFlags, SegmentHeader, Vsbf};
 
 fn main() {
     if args().len() < 2 {
@@ -14,10 +18,28 @@ fn main() {
         .map(|filename| Vsbf::parse(&fs::read(&filename).unwrap()).unwrap().1)
         .collect();
 
+    let sections: Vec<_> = files.iter().flat_map(|f| f.sections()).collect();
+    println!("Sections: {sections:?}");
+    let start = 0;
+
     // TODO: check that there are no relocations referring to a name without a symbol defined (aka, check for undefined symbols)
     // TODO: check that every relocation is in bounds of a single section
 
     merge_strtabs(&mut files);
+
+    let mut output = Vsbf::empty();
+    output.add_segment(SegmentHeader {
+        typ: 0,
+        flags: PermissionFlags::all(),
+        align: 0x1000,
+        file: start as u32,
+        mem: 0,
+        file_size: sections[0].file_size as _,
+        mem_size: sections[0].file_size as _,
+    });
+
+    let mut outfile = File::create("test").unwrap();
+    output.write(&mut outfile).unwrap();
 }
 
 fn merge_strtabs(objs: &mut [Vsbf]) -> Vec<u8> {

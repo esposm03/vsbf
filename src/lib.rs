@@ -461,10 +461,15 @@ impl Vsbf {
         for sect in &mut self.sections {
             sect.offset += SEGMENT_HDR_SIZE;
         }
+        self.segments.push(seg);
     }
 
     pub fn sections(&self) -> Vec<SectionHeader> {
         return self.sections.clone();
+    }
+
+    pub fn segments(&self) -> Vec<SegmentHeader> {
+        self.segments.clone()
     }
 
     // === STRINGS ===

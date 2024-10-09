@@ -14,8 +14,6 @@ fn main() {
 
     let sections = obj.sections();
     let start = sections[0].offset as usize;
-    let end = start + sections[0].file_size as usize;
-    println!("{:x?}", &buf[start..end]);
 
     obj.add_segment(SegmentHeader {
         typ: 0,
