@@ -11,7 +11,7 @@ use unicorn_engine::{
     Arch,
     InsnSysX86::SYSCALL,
     Mode, Permission,
-    RegisterX86::{RAX, RDI, RDX, RSI},
+    RegisterX86::{RAX, RDI, RDX, RSI, RSP},
     Unicorn, SECOND_SCALE,
 };
 use vsbf::Vsbf;
@@ -29,6 +29,7 @@ fn main() {
         .expect("Failed to initialize Capstone");
     let mut emu = Unicorn::new(Arch::X86, Mode::MODE_64).expect("Failed to init Unicorn");
 
+    // Load file
     for segment in file.segments() {
         emu.mem_map(
             segment.mem + 0x1000,
@@ -42,6 +43,11 @@ fn main() {
         emu.mem_write(segment.mem + 0x1000, &data[start..end])
             .unwrap();
     }
+
+    // Setup stack
+    emu.mem_map(0x7fff000, 0x1000, Permission::READ | Permission::WRITE)
+        .unwrap();
+    emu.reg_write(RSP, 0x8000000).unwrap();
 
     // Disassemble every instruction
     let code = emu.mem_read_as_vec(0x1000, 0x1000).unwrap();
