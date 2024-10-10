@@ -481,6 +481,10 @@ impl Vsbf {
         self.segments.clone()
     }
 
+    pub fn push_segment(&mut self, seg: SegmentHeader) {
+        self.segments.push(seg);
+    }
+
     pub fn push_section(&mut self, sec: SectionHeader) {
         self.sections.push(sec);
     }

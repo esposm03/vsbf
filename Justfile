@@ -5,7 +5,7 @@ objdump filename: cp
 	cargo run --bin objdump -- {{filename}}
 
 ld: cp
-	cargo run --bin vsbf -- test.o
+	cargo run --bin linker -- test.o
 
 run: ld
 	cargo run --bin loader -- test

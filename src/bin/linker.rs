@@ -5,7 +5,7 @@ use std::{
     process::exit,
 };
 
-use vsbf::{PermissionFlags, SectionHeader, SegmentHeader, Vsbf};
+use vsbf::{SectionHeader, SegmentHeader, Vsbf};
 
 fn main() {
     if args().len() < 2 {
@@ -19,26 +19,13 @@ fn main() {
         .map(|filename| Vsbf::parse(&fs::read(&filename).unwrap()).unwrap().1)
         .collect();
 
-    let sections: Vec<_> = files.iter().flat_map(|f| f.sections()).collect();
-    println!("Sections: {sections:?}");
-    let start = 0;
+    let mut output = Vsbf::empty();
 
     // TODO: check that there are no relocations referring to a name without a symbol defined (aka, check for undefined symbols)
     // TODO: check that every relocation is in bounds of a single section
-    let mut output = Vsbf::empty();
-
     output.set_strtab(merge_strtabs(&mut files));
     merge_sections(&mut output, &mut files);
-
-    output.add_segment(SegmentHeader {
-        typ: 0,
-        flags: PermissionFlags::all(),
-        align: 0x1000,
-        file: start as u32,
-        mem: 0,
-        file_size: sections[0].file_size as _,
-        mem_size: sections[0].file_size as _,
-    });
+    allocate_segments(&mut output);
 
     let mut outfile = File::create("test").unwrap();
     output.write(&mut outfile).unwrap();
@@ -101,9 +88,23 @@ fn merge_sections(out: &mut Vsbf, objs: &mut [Vsbf]) {
     }
 }
 
+fn allocate_segments(obj: &mut Vsbf) {
+    for sec in obj.sections() {
+        obj.push_segment(SegmentHeader {
+            typ: 0,
+            flags: sec.flags,
+            align: 0x1000,
+            file: sec.offset,
+            mem: sec.offset as _,
+            file_size: sec.file_size as _,
+            mem_size: sec.file_size as _,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use vsbf::{SectionType, Sym};
+    use vsbf::{PermissionFlags, SectionType, Sym};
 
     use super::*;
 
