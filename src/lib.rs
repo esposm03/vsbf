@@ -184,7 +184,7 @@ impl Rel {
 bitflags! {
     /// The access restrictions the given segment will have when loaded in memory
     #[repr(C)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct PermissionFlags: u8 {
         /// The segment is readable
         const R = 0b1;
@@ -280,7 +280,7 @@ impl SegmentHeader {
 }
 
 pub const SECTION_HDR_SIZE: u32 = 16;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SectionHeader {
     pub typ: SectionType,
     pub flags: PermissionFlags,
@@ -332,10 +332,30 @@ impl SectionHeader {
             );
         }
     }
+
+    pub fn is_text(&self) -> bool {
+        self.typ == SectionType::Text
+    }
+    pub fn is_data(&self) -> bool {
+        self.typ == SectionType::Data
+    }
+    pub fn is_rodata(&self) -> bool {
+        self.typ == SectionType::Rodata
+    }
+
+    pub fn is_ronly(&self) -> bool {
+        self.flags == PermissionFlags::R
+    }
+    pub fn is_rx(&self) -> bool {
+        self.flags == PermissionFlags::R | PermissionFlags::X
+    }
+    pub fn is_rw(&self) -> bool {
+        self.flags == PermissionFlags::R | PermissionFlags::W
+    }
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SectionType {
     Text = 0,
     Data = 1,
@@ -457,15 +477,31 @@ impl Vsbf {
         self.segments.push(seg);
     }
 
-    pub fn sections(&self) -> Vec<SectionHeader> {
-        return self.sections.clone();
-    }
-
     pub fn segments(&self) -> Vec<SegmentHeader> {
         self.segments.clone()
     }
 
+    pub fn push_section(&mut self, sec: SectionHeader) {
+        self.sections.push(sec);
+    }
+
+    pub fn sections(&self) -> Vec<SectionHeader> {
+        return self.sections.clone();
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn data_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.data
+    }
+
     // === STRINGS ===
+
+    pub fn set_strtab(&mut self, data: Vec<u8>) {
+        self.strtab = data;
+    }
 
     pub fn push_string(&mut self, data: &str) {
         assert!(data.is_ascii());
@@ -493,8 +529,6 @@ impl Vsbf {
 
     pub fn push_sym(&mut self, sym: Sym) {
         self.syms.push(sym);
-
-        // TODO: adjust all offsets
     }
 
     pub fn syms(&self) -> &[Sym] {
